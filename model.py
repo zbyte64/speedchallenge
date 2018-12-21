@@ -62,7 +62,7 @@ from dataset import SpeedVideoSampler, VideoSampler
 num_classes = 1
 
 # Models to choose from [resnet, alexnet, vgg, squeezenet, densenet, inception]
-model_name = "squeezenet"
+model_name = "alexnet"
 
 # Batch size for training (change depending on how much memory you have)
 batch_size = 8
@@ -220,21 +220,22 @@ class SpeedModel(nn.Module):
     def __init__(self, image_model):
         super(SpeedModel, self).__init__()
         self.image_model = image_model
-        self.conv1 = nn.Conv2d(512, 16, 5)
-        self.conv2 = nn.Conv2d(16, 6, 5)
-        self.fc1 = nn.Linear(512, 1)
+        self.conv = nn.Conv2d(256, 12, 1)
+        self.position_enc = nn.Linear(3192, 32)#12*29*39, 32)
+        self.fc1 = nn.Linear(32*2, 4)
+        self.fc2 = nn.Linear(4, 1)
 
     def forward(self, frame1, frame2):
         positional_features = []
+        flatten = lambda x : x.view(x.size()[0], -1)
         for frame in [frame1, frame2]:
             x = self.image_model(frame)
-            # Max pooling over a (2, 2) window
-            x = F.max_pool2d(F.relu(self.conv1(x)), (2, 2))
-            # If the size is a square you can only specify a single number
-            #x = F.max_pool2d(F.relu(self.conv2(x)), (2, 2))
-            x = x.view(x.size()[0], -1)
+            x = F.relu(self.conv(x))
+            x = self.position_enc(flatten(x))
             positional_features.append(x)
-        x = self.fc1(torch.cat(positional_features, dim=1))
+        x = torch.cat(positional_features, dim=1)
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
         return x
 
 
@@ -249,8 +250,6 @@ def initialize_model(model_name, num_classes, feature_extract, use_pretrained=Tr
         """
         model_ft = models.resnet18(pretrained=use_pretrained)
         set_parameter_requires_grad(model_ft, feature_extract)
-        num_ftrs = model_ft.fc.in_features
-        model_ft.fc = nn.Linear(num_ftrs, num_classes)
         input_size = 224
 
     elif model_name == "alexnet":
@@ -258,8 +257,7 @@ def initialize_model(model_name, num_classes, feature_extract, use_pretrained=Tr
         """
         model_ft = models.alexnet(pretrained=use_pretrained)
         set_parameter_requires_grad(model_ft, feature_extract)
-        num_ftrs = model_ft.classifier[6].in_features
-        model_ft.classifier[6] = nn.Linear(num_ftrs,num_classes)
+        model_ft = model_ft.features
         input_size = 224
 
     elif model_name == "vgg":
@@ -267,17 +265,14 @@ def initialize_model(model_name, num_classes, feature_extract, use_pretrained=Tr
         """
         model_ft = models.vgg11_bn(pretrained=use_pretrained)
         set_parameter_requires_grad(model_ft, feature_extract)
-        num_ftrs = model_ft.classifier[6].in_features
-        model_ft.classifier[6] = nn.Linear(num_ftrs,num_classes)
+        model_ft = model_ft.features
         input_size = 224
-
     elif model_name == "squeezenet":
         """ Squeezenet
         """
         model_ft = models.squeezenet1_0(pretrained=use_pretrained)
         set_parameter_requires_grad(model_ft, feature_extract)
-        model_ft.classifier[1] = nn.Conv2d(512, num_classes, kernel_size=(1,1), stride=(1,1))
-        model_ft.num_classes = num_classes
+        model_tf = model_ft.features
         input_size = 224
 
     elif model_name == "densenet":
@@ -308,7 +303,7 @@ def initialize_model(model_name, num_classes, feature_extract, use_pretrained=Tr
         exit()
 
 
-    return SpeedModel(model_ft.features), input_size
+    return SpeedModel(model_ft), input_size
 
 # Initialize the model for this run
 model_ft, input_size = initialize_model(model_name, num_classes, feature_extract, use_pretrained=True)
@@ -331,9 +326,9 @@ print(model_ft)
 # Just normalization for validation
 data_transforms = {
     'train': transforms.Compose([
-        transforms.Resize(input_size),
+        #transforms.Resize(input_size),
         transforms.ColorJitter(),
-        transforms.CenterCrop(input_size),
+        #transforms.CenterCrop(input_size),
         #transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
@@ -424,60 +419,3 @@ criterion = nn.MSELoss()
 
 # Train and evaluate
 model_ft, hist = train_model(model_ft, dataloaders_dict, criterion, optimizer_ft, num_epochs=num_epochs, is_inception=(model_name=="inception"))
-
-
-######################################################################
-# Comparison with Model Trained from Scratch
-# ------------------------------------------
-#
-# Just for fun, lets see how the model learns if we do not use transfer
-# learning. The performance of finetuning vs. feature extracting depends
-# largely on the dataset but in general both transfer learning methods
-# produce favorable results in terms of training time and overall accuracy
-# versus a model trained from scratch.
-#
-
-# Initialize the non-pretrained version of the model used for this run
-scratch_model,_ = initialize_model(model_name, num_classes, feature_extract=False, use_pretrained=False)
-scratch_model = scratch_model.to(device)
-scratch_optimizer = optim.SGD(scratch_model.parameters(), lr=0.001, momentum=0.9)
-scratch_criterion = nn.CrossEntropyLoss()
-_,scratch_hist = train_model(scratch_model, dataloaders_dict, scratch_criterion, scratch_optimizer, num_epochs=num_epochs, is_inception=(model_name=="inception"))
-
-# Plot the training curves of validation accuracy vs. number
-#  of training epochs for the transfer learning method and
-#  the model trained from scratch
-ohist = []
-shist = []
-
-ohist = [h.cpu().numpy() for h in hist]
-shist = [h.cpu().numpy() for h in scratch_hist]
-
-plt.title("Validation Accuracy vs. Number of Training Epochs")
-plt.xlabel("Training Epochs")
-plt.ylabel("Validation Accuracy")
-plt.plot(range(1,num_epochs+1),ohist,label="Pretrained")
-plt.plot(range(1,num_epochs+1),shist,label="Scratch")
-plt.ylim((0,1.))
-plt.xticks(np.arange(1, num_epochs+1, 1.0))
-plt.legend()
-plt.show()
-
-
-######################################################################
-# Final Thoughts and Where to Go Next
-# -----------------------------------
-#
-# Try running some of the other models and see how good the accuracy gets.
-# Also, notice that feature extracting takes less time because in the
-# backward pass we do not have to calculate most of the gradients. There
-# are many places to go from here. You could:
-#
-# -  Run this code with a harder dataset and see some more benefits of
-#    transfer learning
-# -  Using the methods described here, use transfer learning to update a
-#    different model, perhaps in a new domain (i.e. NLP, audio, etc.)
-# -  Once you are happy with a model, you can export it as an ONNX model,
-#    or trace it using the hybrid frontend for more speed and optimization
-#    opportunities.
-#
