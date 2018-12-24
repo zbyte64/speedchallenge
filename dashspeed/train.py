@@ -1,5 +1,6 @@
 import time
 import copy
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -57,6 +58,8 @@ def train_model(model, critic_model, dataset, criterion, optimizer, num_epochs=2
                         outputs = model(frame1, frame2)
                         loss = criterion(outputs, speed)
 
+                    original_loss = torch.mean(loss)
+                    max_speed = torch.max(speed)
                     critic_loss = torch.mean(criterion(pred_acc, loss))
                     loss = torch.mean(loss * (1 + F.sigmoid(pred_acc)))
                     _, preds = torch.max(outputs, 1)
@@ -71,7 +74,8 @@ def train_model(model, critic_model, dataset, criterion, optimizer, num_epochs=2
                 # statistics
                 running_loss += _loss * frame1.size(0)
 
-                print('loss: {:.4f} delta speed: {:.4f} critic loss: {:.4f}'.format(_loss, _loss ** .5 * dataset.dataset.max_speed, critic_loss))
+                print('loss: {:.4f} delta speed: {:.4f} critic loss: {:.4f} max speed {:f}'.format(
+                    _loss, _loss ** .5 * dataset.dataset.max_speed, critic_loss, max_speed.item()))
 
             epoch_loss = running_loss / len(dataset.dataset)
 
@@ -86,10 +90,11 @@ def train_model(model, critic_model, dataset, criterion, optimizer, num_epochs=2
         # load best model weights
         model.load_state_dict(best_model_wts)
         torch.save(model.state_dict(), './best_model.pth')
+        torch.save(ciritic.state_dict(), './best_critic.pth')
     return model, val_acc_history
 
 
-def run_training_routine():
+def run_training_routine(use_savepoint=True):
     # Initialize the model for this run
     model_ft, input_size = initialize_model(model_name, num_classes, feature_extract, use_pretrained=True)
     critic, _ = initialize_model(model_name, num_classes, feature_extract, use_pretrained=True)
@@ -102,6 +107,13 @@ def run_training_routine():
     train_dataset = SpeedVideoSampler('./data')
     sampler = torch.utils.data.BatchSampler(torch.utils.data.SequentialSampler(train_dataset), batch_size=batch_size, drop_last=True)
     batched_dataset = torch.utils.data.DataLoader(train_dataset, batch_sampler=sampler)
+
+    if use_savepoint and os.path.exists('./best_model.pth'):
+        best_model_wts = torch.load('./best_model.pth')
+        model_ft.load_state_dict(best_model_wts)
+    if use_savepoint and os.path.exists('./best_critic.pth'):
+        best_model_wts = torch.load('./best_critic.pth')
+        critic.load_state_dict(best_model_wts)
 
     model_ft = model_ft.to(device)
 
@@ -145,4 +157,5 @@ def run_training_routine():
 
     # Train and evaluate
     model_ft, hist = train_model(model_ft, critic, batched_dataset, criterion, optimizer_ft, num_epochs=num_epochs, is_inception=(model_name=="inception"))
+
     return model_ft, hist
