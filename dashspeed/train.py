@@ -59,9 +59,10 @@ def train_model(model, critic_model, dataset, criterion, optimizer, num_epochs=2
                         loss = criterion(outputs, speed)
 
                     original_loss = torch.mean(loss)
+                    delta_speed = torch.max(outputs-speed)
                     max_speed = torch.max(speed)
                     critic_loss = torch.mean(criterion(pred_acc, loss))
-                    loss = torch.mean(loss * (1 + F.sigmoid(pred_acc)))
+                    loss = torch.mean(loss * (1 + torch.sigmoid(pred_acc)))
                     _, preds = torch.max(outputs, 1)
                     preds = outputs
                     loss.backward(retain_graph=True)
@@ -75,7 +76,7 @@ def train_model(model, critic_model, dataset, criterion, optimizer, num_epochs=2
                 running_loss += _loss * frame1.size(0)
 
                 print('loss: {:.4f} delta speed: {:.4f} critic loss: {:.4f} max speed {:f}'.format(
-                    _loss, _loss ** .5 * dataset.dataset.max_speed, critic_loss, max_speed.item()))
+                    _loss, delta_speed * dataset.dataset.max_speed, critic_loss, max_speed.item()))
 
             epoch_loss = running_loss / len(dataset.dataset)
 
@@ -90,7 +91,7 @@ def train_model(model, critic_model, dataset, criterion, optimizer, num_epochs=2
         # load best model weights
         model.load_state_dict(best_model_wts)
         torch.save(model.state_dict(), './best_model.pth')
-        torch.save(ciritic.state_dict(), './best_critic.pth')
+        torch.save(critic.state_dict(), './best_critic.pth')
     return model, val_acc_history
 
 
