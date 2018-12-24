@@ -13,3 +13,6 @@ num_epochs = 15
 # Flag for feature extracting. When False, we finetune the whole model,
 #   when True we only update the reshaped layer params
 feature_extract = True
+
+import torch
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")

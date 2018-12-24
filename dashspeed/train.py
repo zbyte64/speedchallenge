@@ -4,13 +4,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from .dataset import SpeedVideoSampler, VideoSampler
+from .dataset import SpeedVideoSampler
 from .model import initialize_model
 from .params import *
 
 
 def train_model(model, dataset, criterion, optimizer, num_epochs=25, is_inception=False):
-    device = next(model.parameters()).device
     since = time.time()
 
     val_acc_history = []
@@ -93,8 +92,6 @@ def run_training_routine():
     train_dataset = SpeedVideoSampler('./data')
     sampler = torch.utils.data.BatchSampler(torch.utils.data.SequentialSampler(train_dataset), batch_size=batch_size, drop_last=True)
     batched_dataset = torch.utils.data.DataLoader(train_dataset, batch_sampler=sampler)
-    # Detect if we have a GPU available
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     model_ft = model_ft.to(device)
 
