@@ -3,13 +3,21 @@ import cv2
 import torch
 import numpy as np
 import random
+import PIL
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader, Sampler
 from torchvision import datasets, models, transforms
 
 
+_image_transform = transforms.ColorJitter()
+_final_transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+])
+
+
 class VideoSampler(Sampler):
-    def __init__(self, path, transformer=None):
+    def __init__(self, path, transformer=_image_transform):
         self.vid_capture = _c = cv2.VideoCapture(path)
         self.n_frames = int(_c.get(cv2.CAP_PROP_FRAME_COUNT))
         self.x_size = int(_c.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -24,33 +32,30 @@ class VideoSampler(Sampler):
             ret, frame = self.vid_capture.read()
             if ret:
                 frame = Image.fromarray(frame)
-                if self.transformer:
-                    frame = self.transformer(frame)
-                else:
-                    frame = torch.from_numpy(frame.astype(np.float32))
-                    # HWC2CHW
-                    frame = frame.permute(2, 0, 1)
-                    frame /= 255
+                frame = self.transformer(frame)
                 yield frame
             else:
                 assert False
 
 
 class SpeedVideoSampler(Dataset):
-    """Sequential Dataset Class for Loading Video"""
+    """
+    Sequential Dataset Class for Loading Dashcam Video with speeds
 
-    def __init__(self, path, max_speed=None, transformer=None):
+    Randomly rotates/flips pairs of images
+    """
+
+    def __init__(self, path, max_speed=None):
         self.path = path
         speed_file = os.path.join(path, 'train.txt')
         self.speeds = torch.FloatTensor(list(map(float, open(speed_file, 'r').readlines())))
         self.max_speed = max_speed or max(self.speeds)
-        self.transformer = transformer
         self.speeds /= self.max_speed
         self._open()
 
     def _open(self):
         video_file = os.path.join(self.path, 'train.mp4')
-        self.frame_sampler = VideoSampler(video_file, transformer=self.transformer)
+        self.frame_sampler = VideoSampler(video_file)
         self._frames = iter(self.frame_sampler)
         self._last_idx = None
         self._ds_iter = iter(self) #yikes, for use with sequential sampling only
@@ -62,11 +67,17 @@ class SpeedVideoSampler(Dataset):
         last_frame = next(self._frames)
         for idx in range(len(self)):
             current_frame = next(self._frames)
+            t = {
+                0: lambda x: _final_transform(x),
+                1: lambda x: _final_transform(x.transpose(PIL.Image.FLIP_LEFT_RIGHT)),
+                2: lambda x: _final_transform(x.transpose(PIL.Image.FLIP_TOP_BOTTOM)),
+                3: lambda x: _final_transform(x.transpose(PIL.Image.ROTATE_180)),
+            }[random.randint(0, 3)]
             if random.randint(0, 1):
-                yield (last_frame, current_frame, self.speeds[idx])
+                yield (t(last_frame), t(current_frame), self.speeds[idx])
             else:
                 #reverse time
-                yield (current_frame, last_frame, -self.speeds[idx])
+                yield (t(current_frame), t(last_frame), -self.speeds[idx])
             last_frame = current_frame
 
     def __getitem__(self, idx):
