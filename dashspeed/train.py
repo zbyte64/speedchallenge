@@ -2,6 +2,7 @@ import time
 import copy
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 
 from .dataset import SpeedVideoSampler
@@ -9,7 +10,7 @@ from .model import initialize_model
 from .params import *
 
 
-def train_model(model, dataset, criterion, optimizer, num_epochs=25, is_inception=False):
+def train_model(model, critic_model, dataset, criterion, optimizer, num_epochs=25, is_inception=False):
     since = time.time()
 
     val_acc_history = []
@@ -17,11 +18,14 @@ def train_model(model, dataset, criterion, optimizer, num_epochs=25, is_inceptio
     best_model_wts = copy.deepcopy(model.state_dict())
     best_loss = 0.0
 
+    critic_optimizer = optim.SGD(critic_model.parameters(), lr=0.001, momentum=0.9)
+
     try:
         for epoch in range(num_epochs):
             print('Epoch {}/{}'.format(epoch, num_epochs - 1))
             print('-' * 10)
             model.train()
+            critic_model.train()
             running_loss = 0.0
             running_corrects = 0
 
@@ -38,6 +42,7 @@ def train_model(model, dataset, criterion, optimizer, num_epochs=25, is_inceptio
                 # forward
                 # track history if only in train
                 with torch.set_grad_enabled(True):
+                    pred_acc = F.relu(critic_model(frame1, frame2))
                     # Get model outputs and calculate loss
                     # Special case for inception because in training it has an auxiliary output. In train
                     #   mode we calculate the loss by summing the final output and the auxiliary output
@@ -52,17 +57,21 @@ def train_model(model, dataset, criterion, optimizer, num_epochs=25, is_inceptio
                         outputs = model(frame1, frame2)
                         loss = criterion(outputs, speed)
 
+                    critic_loss = torch.mean(criterion(pred_acc, loss))
+                    loss = torch.mean(loss * (1 + F.sigmoid(pred_acc)))
                     _, preds = torch.max(outputs, 1)
                     preds = outputs
-                    loss.backward()
+                    loss.backward(retain_graph=True)
                     optimizer.step()
+                    critic_loss.backward()
+                    critic_optimizer.step()
 
                 _loss = loss.item()
 
                 # statistics
                 running_loss += _loss * frame1.size(0)
 
-                print('loss: {:.4f} delta speed: {:.4f}'.format(_loss, _loss ** .5 * dataset.dataset.max_speed))
+                print('loss: {:.4f} delta speed: {:.4f} critic loss: {:.4f}'.format(_loss, _loss ** .5 * dataset.dataset.max_speed, critic_loss))
 
             epoch_loss = running_loss / len(dataset.dataset)
 
@@ -83,6 +92,7 @@ def train_model(model, dataset, criterion, optimizer, num_epochs=25, is_inceptio
 def run_training_routine():
     # Initialize the model for this run
     model_ft, input_size = initialize_model(model_name, num_classes, feature_extract, use_pretrained=True)
+    critic, _ = initialize_model(model_name, num_classes, feature_extract, use_pretrained=True)
 
     # Print the model we just instantiated
     print(model_ft)
@@ -131,8 +141,8 @@ def run_training_routine():
     #
 
     # Setup the loss fxn
-    criterion = nn.MSELoss()
+    criterion = nn.MSELoss(reduction='none')
 
     # Train and evaluate
-    model_ft, hist = train_model(model_ft, batched_dataset, criterion, optimizer_ft, num_epochs=num_epochs, is_inception=(model_name=="inception"))
+    model_ft, hist = train_model(model_ft, critic, batched_dataset, criterion, optimizer_ft, num_epochs=num_epochs, is_inception=(model_name=="inception"))
     return model_ft, hist
