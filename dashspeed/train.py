@@ -91,7 +91,7 @@ def train_model(model, critic_model, dataset, criterion, optimizer, num_epochs=2
         # load best model weights
         model.load_state_dict(best_model_wts)
         torch.save(model.state_dict(), './best_model.pth')
-        torch.save(critic.state_dict(), './best_critic.pth')
+        torch.save(critic_model.state_dict(), './best_critic.pth')
     return model, val_acc_history
 
 
